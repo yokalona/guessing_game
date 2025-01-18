@@ -1,12 +1,14 @@
+use ctrlc;
 use std::io;
 use rand::Rng;
 use std::io::Write;
 use std::str::FromStr;
+use term_cursor;
 
 enum Guess { Ok(u32), Err }
-const BOUNDARY: u32 = 100;
 
 fn header() {
+  print!("{}", term_cursor::Clear);
   println!(r#"
     ___                       _   _                                  _                _
    / _ \_   _  ___  ___ ___  | |_| |__   ___   _ __  _   _ _ __ ___ | |__   ___ _ __ / \
@@ -15,7 +17,6 @@ fn header() {
  \____/ \__,_|\___||___/___/  \__|_| |_|\___| |_| |_|\__,_|_| |_| |_|_.__/ \___|_| \/
 
  "#);
-  print!("\t");
 }
 
 fn footer() {
@@ -30,14 +31,19 @@ fn footer() {
  "#)
 }
 
-fn next_round(tries: &mut u32) {
-  print!("\tPlease, enter your guess: ");
-  io::stdout().flush().unwrap();
-  *tries += 1;
+fn welcome() {
+  print!(" Please, enter your guess: ");
 }
 
-fn generate_number() -> u32 {
-  rand::thread_rng().gen_range(1..=BOUNDARY)
+fn next_round() {
+  welcome();
+  io::stdout().flush().unwrap();
+}
+
+fn generate_number(boundary: u32) -> u32 {
+  let number = rand::thread_rng().gen_range(1..=boundary);
+  print!(" I thought of a number, can You guess it?\n\n");
+  number
 }
 
 fn read_input() -> Result<u32, <u32 as FromStr>::Err> {
@@ -48,45 +54,91 @@ fn read_input() -> Result<u32, <u32 as FromStr>::Err> {
   guess.trim().parse()
 }
 
-fn get_guess() -> Guess {
+fn get_boundary() -> u32 {
+  loop {
+    print!(" Let's set maximum value for the number I'll think of: ");
+    io::stdout().flush().unwrap();
+    match read_input() {
+      Ok(boundary) if boundary > 1 => return boundary,
+      Ok(_) | Err(_)               => {
+        println!(" The value should be bigger than 1 and smaller than: {}", u32::MAX);
+      }
+    }
+  }
+}
+
+fn get_guess(tries: &mut u32, boundary: u32) -> Guess {
   match read_input() {
-    Ok(num) if num > 1 && num < BOUNDARY => Guess::Ok(num),
-    Ok(_) => {
-      print!(" The riddle is between 1 and {BOUNDARY}.\n\t");
+    Ok(guess) if withing_boundaries(guess, boundary) => {
+      *tries += 1;
+      Guess::Ok(guess)
+    },
+    Ok(guess)                                        => {
+      message(guess, format!("Sorry, {guess} is not between 1 and {boundary}"));
       Guess::Err
     }
-    Err(_) => {
-      print!(" The guess could be only the number between 1 and {BOUNDARY}.\n\t");
+    Err(_)                                           => {
+      println!(" The guess could be only the number between 1 and {boundary}.");
       Guess::Err
     },
   }
 }
 
-fn small() {
-  print!(" Too small!");
+fn withing_boundaries(num: u32, boundary: u32) -> bool {
+  num >= 1 && num <= boundary
 }
 
-fn large() {
-  print!(" Too big!");
+fn number_length(number: u32) -> u32 {
+  number.checked_ilog10().unwrap_or(0) + 1
 }
 
-fn equal(answer: u32, tries: u32) {
-  print!("\n {answer} is the correct answer, congratulations!");
-  print!("\n It took You {tries} tries to guess correctly, but can you do better?");
+fn message(guess: u32, message: String) {
+  print!("{}", term_cursor::Up(1));
+  welcome();
+  let intent = (0..number_length(u32::MAX) - number_length(guess)).map(|_| " ").collect::<String>();
+  println!("{guess}.{intent} {message}.");
+}
+
+fn too_small(guess: u32) {
+  message(guess, format!("Sorry, {guess} is too small"));
+}
+
+fn too_large(guess: u32) {
+  message(guess, format!("Sorry, {guess} is too big"));
+}
+
+fn you_won(answer: u32, tries: u32) {
+  message(answer, format!("{answer} is the correct answer, congratulations!"));
   footer();
+  print!("\n It took You {tries} tries to guess correctly");
+  if tries > 1 {
+    println!(", but can you do better?\n");
+  } else {
+    println!("\n");
+  }
+}
+
+fn on_give_up(riddle: u32) {
+  ctrlc::set_handler(move || {
+    println!("\n\n {riddle} was the correct answer\n");
+    std::process::exit(0)
+  })
+  .expect("Error setting Ctrl-C handler")
 }
 
 fn main() {
   header();
-  let secret_number = generate_number();
   let mut tries = 0;
+  let boundary = get_boundary();
+  let riddle = generate_number(boundary);
+  on_give_up(riddle);
   loop {
-    next_round(&mut tries);
-    match get_guess() {
-      Guess::Ok(guess) if guess < secret_number => small(),
-      Guess::Ok(guess) if guess > secret_number => large(),
-      Guess::Ok(_) => { equal(secret_number, tries); return },
-      Guess::Err   => continue,
+    next_round();
+    match get_guess(&mut tries, boundary) {
+      Guess::Ok(guess) if guess < riddle => too_small(guess),
+      Guess::Ok(guess) if guess > riddle => too_large(guess),
+      Guess::Ok(_)                       => break you_won(riddle, tries),
+      Guess::Err                         => continue,
     };
   }
 }
